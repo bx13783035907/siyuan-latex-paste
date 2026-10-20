@@ -400,6 +400,21 @@ function withSelection(element, fn) {
   }
 }
 
+/**
+ * 替换 navigator.clipboard。
+ *
+ * 注意不能写成 Object.defineProperty(globalThis.navigator, ...)：
+ * globalThis.navigator 是 Node 21 才加的全局对象，Node 20 上它是 undefined，
+ * 直接 defineProperty 会抛 TypeError。
+ */
+function mockClipboard(writeText) {
+  Object.defineProperty(globalThis, "navigator", {
+    value: { clipboard: { writeText } },
+    configurable: true,
+    writable: true,
+  });
+}
+
 function fireCopy(plugin) {
   const store = {};
   let prevented = false;
@@ -591,9 +606,8 @@ test("块图标菜单点击后写入带 $ 的 Markdown", async () => {
   });
 
   let written = null;
-  Object.defineProperty(globalThis.navigator, "clipboard", {
-    value: { writeText: async (text) => { written = text; } },
-    configurable: true,
+  mockClipboard(async (text) => {
+    written = text;
   });
   await items[0].click();
 
@@ -649,9 +663,8 @@ test("右键菜单点击后写入带 $ 的 Markdown", async () => {
   handler({ detail: { range, menu: { addItem: (item) => items.push(item) } } });
 
   let written = null;
-  Object.defineProperty(globalThis.navigator, "clipboard", {
-    value: { writeText: async (text) => { written = text; } },
-    configurable: true,
+  mockClipboard(async (text) => {
+    written = text;
   });
   await items[0].click();
 
