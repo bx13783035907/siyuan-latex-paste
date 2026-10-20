@@ -1,0 +1,52 @@
+name: Release
+
+# 打 tag 就自动跑：类型检查 → 测试 → 构建 → 打包 package.zip → 发 Release
+# 集市只认 Latest Release 里附带的 package.zip，别手动传压缩包。
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查与测试
+        run: npm run verify
+
+      - name: 构建
+        run: npm run build
+
+      - name: 打包
+        run: |
+          cd dist
+          zip -r ../package.zip . -x '*.map'
+
+      - name: 校验产物
+        run: |
+          echo "=== package.zip 内容 ==="
+          unzip -l package.zip
+          for f in index.js index.css plugin.json; do
+            unzip -l package.zip | grep -q " $f$" || { echo "缺少 $f"; exit 1; }
+          done
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          files: package.zip
+          generate_release_notes: true

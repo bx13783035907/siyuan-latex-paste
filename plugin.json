@@ -1,0 +1,37 @@
+{
+  "name": "siyuan-latex-paste",
+  "author": "clock",
+  "url": "https://github.com/clock/siyuan-latex-paste",
+  "version": "0.2.8",
+  "minAppVersion": "3.1.0",
+  "backends": [
+    "all"
+  ],
+  "frontends": [
+    "all"
+  ],
+  "disabledInPublish": false,
+  "displayName": {
+    "default": "LaTeX Math Paste",
+    "zh-CN": "LaTeX 公式粘贴"
+  },
+  "description": {
+    "default": "Paste text containing LaTeX and get real SiYuan math formulas: \\( ... \\), \\[ ... \\] and LaTeX environments are converted automatically.",
+    "zh-CN": "粘贴含 LaTeX 的内容时自动转成思源公式：\\( … \\)、\\[ … \\]、equation/align 等环境都会被识别。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "icon": "icon.png",
+  "preview": "preview.png",
+  "keywords": [
+    "LaTeX",
+    "math",
+    "formula",
+    "paste",
+    "公式",
+    "粘贴",
+    "数学"
+  ]
+}

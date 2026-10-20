@@ -1,0 +1,7 @@
+# 统一行尾，避免 Windows 上改出来的 CRLF 跑到 CI 的 Linux 里
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.webp binary
+*.zip binary
