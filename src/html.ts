@@ -44,6 +44,9 @@ const token = (index: number) => `${OPEN}${index}${CLOSE}`;
 
 export const HTML_TOKEN_RE = new RegExp(`${OPEN}(\\d+)${CLOSE}`, "g");
 
+/** 整行只有一个占位符（行首最多带缩进和 `>`）—— 块级公式最常见的样子 */
+const TOKEN_LINE_RE = new RegExp(`^([ \\t>]*)${OPEN}(\\d+)${CLOSE}[ \\t]*$`, "gm");
+
 /** 把一段纯文本里的公式抽成占位符 */
 function stashInText(text: string, segments: MathSegment[]): string {
   return text.replace(MATH_IN_TEXT, (matched, ...rest) => {
@@ -120,38 +123,83 @@ export function stashMathInHtml(html: string, segments: MathSegment[] = []): Sta
 }
 
 /**
- * 占位符所在的那一行是不是 GFM 表格的一行。
+ * 占位符所在那一行的行首前缀：空格缩进、以及引用块的 `>`。
  *
- * 单元格里塞不下 `$$` 多行公式：还原出的换行会把表格的一行拆成好几行，
- * 整张表当场碎掉。表格里只能退成行内 `$…$`，内容保住、表格也活着。
+ * 还原出来的 `$$` 必须带着同样的前缀，否则块级公式会从列表项 / 引用块里
+ * 掉出来（Markdown 靠缩进和 `>` 判断归属），列表会被一条公式拦腰截断。
  */
-function inTableRow(markdown: string, offset: number): boolean {
+function linePrefix(markdown: string, offset: number): { prefix: string; line: string } {
   const lineStart = markdown.lastIndexOf("\n", offset - 1) + 1;
   let lineEnd = markdown.indexOf("\n", offset);
   if (lineEnd === -1) {
     lineEnd = markdown.length;
   }
-  const line = markdown.slice(lineStart, lineEnd).trim();
-  return line.startsWith("|") && line.length > 1;
+  const head = markdown.slice(lineStart, offset);
+  return {
+    // 只有「纯结构字符」才算前缀；普通文字前面那部分不是前缀
+    prefix: /^[ \t>]*$/.test(head) ? head : "",
+    line: markdown.slice(lineStart, lineEnd),
+  };
 }
 
-/** 把 Markdown 里的占位符还原成思源公式 */
+/** 多行公式的每一行都要带上同样的前缀，否则除了首行都会掉出容器 */
+function indentBody(body: string, prefix: string): string {
+  return body
+    .split("\n")
+    .map((row) => (row.trim() === "" ? "" : prefix + row))
+    .join("\n");
+}
+
+/**
+ * 把 Markdown 里的占位符还原成思源公式。
+ *
+ * 分两步：
+ * 1. 整行就是占位符的（块级公式），连行首前缀一起替换 —— 前缀留在原地的话
+ *    会多出一行「只剩缩进的空壳」，还平白多出两个空行。
+ * 2. 夹在文字中间的（行内公式、表格单元格里的），就地替换。
+ */
 export function restoreMath(markdown: string, segments: MathSegment[]): string {
   if (!segments.length) {
     return markdown;
   }
-  return markdown.replace(HTML_TOKEN_RE, (_matched, index: string, offset: number) => {
-    const segment = segments[Number(index)];
-    if (!segment) {
+
+  const bodyOf = (index: number): string | null => {
+    const segment = segments[index];
+    return segment ? segment.latex.replace(/(?<!\\)\$/g, "\\$") : null;
+  };
+
+  let out = markdown.replace(TOKEN_LINE_RE, (_matched, prefix: string, index: string) => {
+    const body = bodyOf(Number(index));
+    if (body === null) {
       return "";
     }
-    const body = segment.latex.replace(/(?<!\\)\$/g, "\\$");
-    if (segment.display && !inTableRow(markdown, offset)) {
-      return `\n\n$$\n${body}\n$$\n\n`;
+    if (!segments[Number(index)].display) {
+      return `${prefix}$${body}$`;
     }
-    // 表格单元格里连换行都留不得，align 环境的换行要压成空格
+    // 有前缀（列表缩进、引用 >）说明公式已经在某个容器里，
+    // 空行由容器的块结构提供，这里再加就会把容器撑断。
+    // 没有前缀才需要自己补空行，让思源把它当成独立的块级公式
+    if (prefix) {
+      return `${prefix}$$\n${indentBody(body, prefix)}\n${prefix}$$`;
+    }
+    return `\n\n$$\n${body}\n$$\n\n`;
+  });
+
+  out = out.replace(HTML_TOKEN_RE, (_matched, index: string, offset: number) => {
+    const body = bodyOf(Number(index));
+    if (body === null) {
+      return "";
+    }
+    const { prefix, line } = linePrefix(out, offset);
+    // 单元格里塞不下 `$$` 多行公式：还原出的换行会把表格的一行拆成好几行，
+    // 整张表当场碎掉。表格里只能退成行内 `$…$`，连换行都要压成空格
+    if (segments[Number(index)].display && !(line.trim().startsWith("|") && line.trim().length > 1)) {
+      return `\n\n${prefix}$$\n${indentBody(body, prefix)}\n${prefix}$$\n\n`;
+    }
     return `$${body.replace(/\s*\n\s*/g, " ")}$`;
   });
+
+  return out;
 }
 
 /**
@@ -221,8 +269,21 @@ export function extractMathNodes(root: HTMLElement, segments: MathSegment[] = []
     if (!latex) {
       continue;
     }
-    segments.push({ latex, display: isDisplayNode(node) });
-    node.replaceWith(document.createTextNode(token(segments.length - 1)));
+    const display = isDisplayNode(node);
+    segments.push({ latex, display });
+    const text = token(segments.length - 1);
+
+    // 块级公式要保留「块」的身份：换成纯文本节点的话，它就和前一段粘连在一起，
+    // 在列表项里（段落被拆掉 <p> 的地方）直接拼成「由定义$$\n…」，列表被撑断。
+    // 表格单元格例外 —— 单元格里多一个块就会把整行表格拆散。
+    const inCell = typeof node.closest === "function" && node.closest("td, th") !== null;
+    if (display && !inCell) {
+      const block = document.createElement("div");
+      block.textContent = text;
+      node.replaceWith(block);
+      continue;
+    }
+    node.replaceWith(document.createTextNode(text));
   }
   return segments;
 }

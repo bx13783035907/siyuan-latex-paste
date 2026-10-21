@@ -63,9 +63,18 @@ const ENV_RE = new RegExp(
 const BRACKET_RE = /(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g;
 const PAREN_RE = /(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)/g;
 
-/** 裸 LaTeX 行的判定：必须是明确的数学命令，避免误伤路径、正则等普通文本 */
+/**
+ * 裸 LaTeX 行的判定：必须是明确的数学命令，避免误伤路径、正则等普通文本。
+ *
+ * 特意不含 `\begin` / `\end`：环境的配对由上面第 2 步负责，
+ * 裸 LaTeX 只该认「一行就是一个公式」的情况。否则一段没配对的
+ * `\begin{align}` 会被单独包成块，后半截掉在外面，比不动更糟。
+ */
 const BARE_LATEX_RE =
-  /\\(frac|dfrac|tfrac|sqrt|sum|prod|int|iint|oint|lim|log|ln|exp|sin|cos|tan|alpha|beta|gamma|delta|theta|lambda|mu|sigma|omega|pi|infty|partial|nabla|cdot|times|div|leq|geq|neq|approx|equiv|in|notin|subset|cup|cap|forall|exists|rightarrow|Rightarrow|leftrightarrow|Leftrightarrow|begin|end)\b|\^\{|_\{/;
+  /\\(frac|dfrac|tfrac|sqrt|sum|prod|int|iint|oint|lim|log|ln|exp|sin|cos|tan|alpha|beta|gamma|delta|theta|lambda|mu|sigma|omega|pi|infty|partial|nabla|cdot|times|div|leq|geq|neq|approx|equiv|in|notin|subset|cup|cap|forall|exists|rightarrow|Rightarrow|leftrightarrow|Leftrightarrow)\b|\^\{|_\{/;
+
+/** 文件路径不是公式，哪怕里面正好有个 \frac */
+const PATH_LIKE_RE = /^(?:[A-Za-z]:[\\/]|\\\\|\.{1,2}[\\/]|~[\\/]|\/[A-Za-z])/;
 
 const PLACEHOLDER_OPEN = "\u0000";
 const PLACEHOLDER_CLOSE = "\u0001";
@@ -112,6 +121,14 @@ function wrapBareLine(line: string): string | null {
     return null;
   }
   if (/^(#|>|-|\*|\+|\||\d+\.|\[|\]|!\[)/.test(trimmed)) {
+    return null;
+  }
+  // 路径里常出现 \frac、\times 这种词，别把文件路径包成公式
+  if (PATH_LIKE_RE.test(trimmed)) {
+    return null;
+  }
+  // 环境必须成对交给上面那一步，这里见到 begin/end 就放手
+  if (/\\(?:begin|end)\s*\{/.test(trimmed)) {
     return null;
   }
   if (!BARE_LATEX_RE.test(trimmed)) {
@@ -164,6 +181,13 @@ function convertSegment(segment: string, options: LatexConvertOptions): LatexCon
 
   // 5. 裸 LaTeX（默认关闭，逐行判断）
   if (options.bare) {
+    // 上面几步刚生成的 $$ 块还没保护。不先收起来的话，裸 LaTeX 会钻进去
+    // 把 \begin{align*} / \end{align*} 再各包一层 $$，整段直接炸掉
+    text = text.replace(DISPLAY_MATH, (matched) => {
+      stash.push(matched);
+      return placeholder(stash.length - 1);
+    });
+
     text = text
       .split("\n")
       .map((line) => {

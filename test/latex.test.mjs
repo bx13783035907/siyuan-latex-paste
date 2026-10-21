@@ -147,3 +147,38 @@ test("$dA$ 这种短公式能被 hasMarkdownMath 识别", () => {
   assert.equal(hasMarkdownMath("记 $dA$ 为面积测度"), true);
   assert.equal(hasMarkdownMath("这本书 $5 到 $10 之间"), false);
 });
+
+// ---- 裸 LaTeX：只处理「一行就是一个公式」的情况 ----
+
+const BARE = { ...DEFAULT, bare: true };
+const convertBare = (text) => convertLatex(text, BARE);
+
+test("align* 环境不会被裸 LaTeX 再包一层", () => {
+  const result = convertBare("\\begin{align*}\nx &= 1 \\\\\ny &= 2\n\\end{align*}");
+  assert.equal(result.count, 1);
+  assert.equal(
+    result.text,
+    "\n\n$$\n\\begin{align*}\nx &= 1 \\\\\ny &= 2\n\\end{align*}\n$$\n\n",
+    "整段环境应该只包一层 $$，不能出现嵌套",
+  );
+});
+
+test("文件路径里的 \\frac 不会被当成公式", () => {
+  for (const path of ["C:\\Users\\x\\frac\\a.txt", "D:/data/sqrt/out.csv", "~/.config/frac"]) {
+    const result = convertBare(path);
+    assert.equal(result.count, 0, `${path} 不是公式`);
+    assert.equal(result.text, path, "路径要原样保留");
+  }
+});
+
+test("没配对的 \\begin 原样不动", () => {
+  const result = convertBare("\\begin{align}\na\n");
+  assert.equal(result.count, 0, "缺 \\end 的环境不处理，否则会被拆成两半");
+  assert.equal(result.text, "\\begin{align}\na\n");
+});
+
+test("单独一行的公式命令仍然会被包成块", () => {
+  const result = convertBare("\\frac{a}{b}");
+  assert.equal(result.count, 1);
+  assert.match(result.text, /\$\$\n\\frac\{a\}\{b\}\n\$\$/);
+});

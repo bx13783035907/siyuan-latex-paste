@@ -42,17 +42,20 @@ SiYuan expresses lists, headings and quotes with custom tags like `<div data-typ
 | In SiYuan | Copied out |
 | --- | --- |
 | Bullet / ordered list | `- item` / `1. item`, nested items indented |
+| Ordered list not starting at 1 | Start number preserved (`3.` `4.`) |
+| List item with two paragraphs | Second paragraph starts on its own line, still indented inside the item |
 | Task list | `- [ ]` / `- [x]` |
 | Heading h1–h6 | `#` … `######` |
 | Blockquote | `> ` |
 | Callout | `> ` (Markdown has no equivalent, a quote is the closest match) |
 | Table | GFM table (paragraphs inside cells don't break it) |
-| Code block | ` ```lang ` fence, contents preserved verbatim |
+| Code block | ` ```lang ` fence, **blank lines inside are preserved** |
 | Thematic break | `---` |
 | Bold / italic / inline code / strikethrough | `**bold**` / `*italic*` / `` `code` `` / `~~struck~~` |
 | Link | `[text](url)`, url taken from SiYuan's `data-href` |
 | Tag | `#tag#` |
-| Display formula inside a list item | Still a `$$` block — it is no longer swallowed |
+| Display formula inside a list item | Still a `$$` block, indented with the list so the list isn't cut in half |
+| Display formula inside a blockquote | Every line keeps its `> ` prefix, so it stays in the quote |
 | Display formula inside a table cell | Downgraded to inline `$…$`, otherwise the line breaks would shatter the table |
 
 ## Install

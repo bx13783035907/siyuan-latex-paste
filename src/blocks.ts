@@ -226,6 +226,11 @@ function convertBlockquote(el: HTMLElement): HTMLElement {
 function convertList(el: HTMLElement): HTMLElement {
   const sub = el.getAttribute("data-subtype") ?? "u";
   const list = document.createElement(sub === "o" ? "ol" : "ul");
+  // 「从 5 开始编号」这种起始值不带上，复制出去就变成 1. 2. 了
+  const start = el.getAttribute("start") ?? el.getAttribute("data-start");
+  if (list.nodeName === "OL" && start && /^\d+$/.test(start.trim())) {
+    list.setAttribute("start", start.trim());
+  }
 
   for (const child of Array.from(el.childNodes)) {
     if (child.nodeType === TEXT_NODE) {
@@ -250,7 +255,30 @@ function convertList(el: HTMLElement): HTMLElement {
 
 function convertListItem(el: HTMLElement): HTMLLIElement {
   const li = document.createElement("li");
-  translateChildren(el, li, true);
+  let paragraphSeen = false;
+
+  for (const child of Array.from(el.childNodes)) {
+    const isParagraph =
+      child.nodeType === ELEMENT_NODE &&
+      (child as HTMLElement).getAttribute("data-type") === "NodeParagraph";
+
+    // 列表项里的第一段要拆掉 <p>，否则 Turndown 把每一项都撑成独立段落，
+    // 一条紧凑列表就散了。但第二段起必须保留 <p>：
+    // 拆掉之后两段会直接粘成一句话，靠文本节点补换行也没用
+    // （Turndown 会把块内的空白折叠成一个空格）
+    if (isParagraph && paragraphSeen) {
+      const p = document.createElement("p");
+      translateChildren(child as HTMLElement, p);
+      li.appendChild(p);
+      continue;
+    }
+    if (isParagraph) {
+      paragraphSeen = true;
+    }
+
+    translateChild(child, li, true);
+  }
+
   return li;
 }
 

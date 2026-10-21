@@ -909,7 +909,7 @@ test("列表项里的块级公式不会被吞掉", async () => {
   const md = store["text/plain"];
 
   assert.match(md, /^- 推导$/m, "列表项文字");
-  assert.match(md, /\$\$\nE = mc\^2\n\$\$/, "列表项里的块级公式要还原成 $$ 块");
+  assert.match(md, /^ {4}\$\$\n {4}E = mc\^2\n {4}\$\$$/m, "列表项里的块级公式要还原成 $$ 块，并且跟着列表缩进");
 });
 
 test("表格单元格里的块级公式降级成行内，表格不散架", async () => {
@@ -976,3 +976,79 @@ test("思源标签复制成 #标签#", async () => {
 
   assert.match(store["text/plain"], /#复分析# \$z\$/, "标签要带上 # 才有语义");
 });
+
+test("列表项里的两个段落不会粘成一句话", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeList" data-subtype="u"><div data-type="NodeListItem">' +
+      '<div class="protyle-action"></div>' +
+      `<div data-type="NodeParagraph"><div contenteditable="true">第一段 ${inlineMath("a", "a")}</div></div>` +
+      '<div data-type="NodeParagraph"><div contenteditable="true">第二段</div></div>' +
+      "</div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.equal(store["text/plain"], "- 第一段 $a$\n\n    第二段", "第二段要另起一段并缩进到列表项里");
+});
+
+test("有序列表保留起始编号", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeList" data-subtype="o" start="3">' +
+      `<div data-type="NodeListItem"><div data-type="NodeParagraph"><div contenteditable="true">三 ${inlineMath("c", "c")}</div></div></div>` +
+      '<div data-type="NodeListItem"><div data-type="NodeParagraph"><div contenteditable="true">四</div></div></div>' +
+      "</div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^3\. 三 \$c\$/m, "从 3 开始的列表不能变成 1.");
+  assert.match(md, /^4\. 四$/m);
+});
+
+test("引用块里的块级公式带着 > 前缀", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeBlockquote">' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">说明</div></div>' +
+      '<div data-type="NodeMathBlock" data-content="a=b">渲染</div>' +
+      "</div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^> 说明$/m);
+  assert.match(md, /^> \$\$$\n> a=b\n> \$\$$/m, "公式要留在引用块里，不能掉到外面");
+});
+
+test("代码块里的连续空行原样保留", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeCodeBlock" data-subtype="python">' +
+      '<div class="protyle-action"><span class="protyle-action__language">python</span></div>' +
+      '<div class="hljs"><div contenteditable="true">a = 1\n\n\n\nb = 2</div></div></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      inlineMath("x", "x") +
+      "</div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /```python\na = 1\n\n\n\nb = 2\n```/, "代码块内的空行不能和正文一起被折叠");
+});
+
+test("正文里的多余空段落照常压成一个空行", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeParagraph"><div contenteditable="true">甲 ' +
+      inlineMath("a", "a") +
+      "</div></div>" +
+      '<div data-type="NodeParagraph"><div contenteditable="true"></div></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true"></div></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">乙</div></div>',
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.equal(store["text/plain"], "甲 $a$\n\n乙", "中间只留一个空行");
+});
+

@@ -17,6 +17,7 @@ import {
   type MathSegment,
 } from "./html";
 import { renderSiyuanBlocks } from "./blocks";
+import { collapseBlankLines } from "./markdown";
 import { DEFAULT_SETTINGS, SETTINGS_KEY, type LatexPasteSettings } from "./settings";
 
 interface IPasteDetail {
@@ -445,10 +446,11 @@ module.exports = class LatexPaste extends Plugin {
     // 先把思源的块结构（列表 / 标题 / 引用 / 代码块）翻译成标准 HTML 标签。
     // 不翻译的话 Turndown 认不出来，列表符号、## 标题、> 引用会整个丢掉。
     const normalized = renderSiyuanBlocks(source);
-    // 块级公式还原时会带出前后空行，连续几段就会堆成一堆空行
-    const markdown = restoreMath(this.turndownService().turndown(normalized.innerHTML), segments)
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    // 块级公式还原时会带出前后空行，连续几段就会堆成一堆空行。
+    // 折叠时空行只在代码块外面压 —— 代码里的空行是有意义的
+    const markdown = collapseBlankLines(
+      restoreMath(this.turndownService().turndown(normalized.innerHTML), segments),
+    ).trim();
     if (!markdown) {
       return null;
     }
@@ -727,7 +729,10 @@ module.exports = class LatexPaste extends Plugin {
           const body = content
             .replace(/^\n+/, "")
             .replace(/\n+$/, "\n")
-            .replace(/\n/g, "\n    ");
+            .split("\n")
+            // 续行缩进 4 空格才留在列表项里；空行不缩进，否则会留下一行满是空格
+            .map((line, index) => (index === 0 || line.trim() === "" ? line : `    ${line}`))
+            .join("\n");
           return prefix + body + (node.nextSibling && !/\n$/.test(body) ? "\n" : "");
         },
       });
