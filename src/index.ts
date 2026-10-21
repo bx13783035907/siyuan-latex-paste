@@ -583,7 +583,7 @@ module.exports = class LatexPaste extends Plugin {
     await this.writeMarkdown(result);
   };
 
-  /** 光标所在的那个块元素（思源的块都带 data-node-id） */
+  /** 光标所在的块元素（思源的块都带 data-node-id） */
   private currentBlock(): HTMLElement | null {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
@@ -595,7 +595,18 @@ module.exports = class LatexPaste extends Plugin {
     if (!element || typeof element.closest !== "function" || !element.closest(".protyle-wysiwyg")) {
       return null;
     }
-    return (element.closest("[data-node-id]") as HTMLElement | null) ?? null;
+
+    // 光标停在列表项、表格单元格、引用块里面时，「最近的那个块」只是一段文字。
+    // 只复制它的话，列表符号、表格、引用结构全没了。所以往上爬到编辑器下的第一层块
+    let block = element.closest("[data-node-id]") as HTMLElement | null;
+    while (block) {
+      const parent = block.parentElement?.closest("[data-node-id]") as HTMLElement | null;
+      if (!parent || !parent.closest(".protyle-wysiwyg")) {
+        break;
+      }
+      block = parent;
+    }
+    return block;
   }
 
   /**

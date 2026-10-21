@@ -41,7 +41,10 @@ class MockPlugin {
   async saveData(key, value) {
     this.stored[key] = value;
   }
-  addCommand() {}
+  addCommand(command) {
+    // 记录下来，测试里可以直接触发「复制为 Markdown」命令
+    (this.commands ||= []).push(command);
+  }
   onLayoutReady() {}
 }
 
@@ -391,6 +394,23 @@ function withSelection(element, fn) {
   const range = document.createRange();
   range.selectNodeContents(element);
   const selection = { rangeCount: 1, isCollapsed: false, getRangeAt: () => range };
+  const original = dom.window.getSelection;
+  dom.window.getSelection = () => selection;
+  try {
+    return fn();
+  } finally {
+    dom.window.getSelection = original;
+  }
+}
+
+/** 模拟「光标停在某个节点上、没有选中任何文字」 */
+function withCaret(node, fn) {
+  const selection = {
+    rangeCount: 1,
+    isCollapsed: true,
+    anchorNode: node,
+    getRangeAt: () => null,
+  };
   const original = dom.window.getSelection;
   dom.window.getSelection = () => selection;
   try {
@@ -1019,6 +1039,27 @@ test("引用块里的块级公式带着 > 前缀", async () => {
 
   assert.match(md, /^> 说明$/m);
   assert.match(md, /^> \$\$$\n> a=b\n> \$\$$/m, "公式要留在引用块里，不能掉到外面");
+});
+
+test("光标停在列表项里用命令复制时，带出列表符号而不是裸段落", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-node-id="list1" data-type="NodeList" data-subtype="u">' +
+      '<div data-node-id="item1" data-type="NodeListItem"><div class="protyle-action"></div>' +
+      '<div data-node-id="p1" data-type="NodeParagraph">' +
+      `<div contenteditable="true">条目 ${inlineMath("x", "x")}</div></div></div></div>`,
+  );
+  const textNode = container.querySelector('[data-node-id="p1"] [contenteditable]').firstChild;
+
+  let written = null;
+  mockClipboard(async (text) => {
+    written = text;
+  });
+  const command = plugin.commands.find((item) => item.langKey === "commandCopyAsMarkdown");
+  assert.ok(command, "应该注册了复制命令");
+  await withCaret(textNode, () => command.callback());
+
+  assert.match(written, /^- 条目 \$x\$/m, "光标在项里也要带上 - 标记，不能只吐一段裸文字");
 });
 
 test("代码块里的连续空行原样保留", async () => {
