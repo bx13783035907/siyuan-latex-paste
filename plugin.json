@@ -2,7 +2,7 @@
   "name": "siyuan-latex-paste",
   "author": "clock-05",
   "url": "https://github.com/clock-05/siyuan-latex-paste",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "minAppVersion": "3.1.0",
   "backends": [
     "all"

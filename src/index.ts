@@ -94,15 +94,19 @@ module.exports = class LatexPaste extends Plugin {
       }),
     );
 
-    // 思源是 Store 版，F12 可能打不开开发者工具，所以把结果落到插件存储里，
-    // 外面直接读文件就能排查。
-    await this.writeDiagnose(steps);
+    // 这里**不能**无条件写存储。
+    // saveData 会落到 data/storage/petal/<插件名>/，思源把该目录的变更广播给所有窗口，
+    // 每个窗口的插件随之重载 → 又写一次 → 无限重启。多窗口下必现。
+    // 所以正常加载零写入；只有真的注册失败、且用户开了调试时才记一笔。
+    const failed = steps.filter((step) => step.includes("FAIL"));
+    if (failed.length > 0 && this.settings.debug) {
+      await this.writeDiagnose(steps);
+    }
 
     this.log("插件已加载", JSON.stringify({ settings: this.settings, steps }));
 
     // 提示别在这里弹：onload 阶段思源的 UI 还没就绪，showMessage 会静默失效。
     // 先记下来，等 onLayoutReady 再弹。
-    const failed = steps.filter((step) => step.includes("FAIL"));
     this.loadReport =
       failed.length > 0
         ? `LaTeX 公式粘贴：${failed.length} 项注册失败（${failed.join("；")}）`
@@ -594,8 +598,20 @@ module.exports = class LatexPaste extends Plugin {
     void this.writeMenuProbe({ injected: true, chars: result.markdown.length });
   };
 
-  /** 右键菜单探针，写进 petal 存储，绕开打不开的开发者工具 */
+  /**
+   * 右键菜单探针。
+   *
+   * 每次右键都写 petal 存储会在多窗口下引发反复重载（同 onload 那个问题），
+   * 所以只允许写一次，且必须显式打开调试开关。功能本身已验证可用，
+   * 这里仅作为将来排查的兜底。
+   */
+  private menuProbeWritten = false;
+
   private async writeMenuProbe(info: Record<string, unknown>) {
+    if (!this.settings.debug || this.menuProbeWritten) {
+      return;
+    }
+    this.menuProbeWritten = true;
     try {
       await this.saveData("menu-probe", { at: new Date().toISOString(), ...info });
     } catch {

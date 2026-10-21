@@ -28,7 +28,7 @@ export const DEFAULT_SETTINGS: LatexPasteSettings = {
   bareLatex: false,
   markdownMath: true,
   copyAsMarkdown: true,
-  debug: true,
+  debug: false,
 };
 
 export const SETTINGS_KEY = "settings";

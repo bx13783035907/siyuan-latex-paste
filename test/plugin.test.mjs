@@ -679,3 +679,33 @@ test("编辑器外的复制不处理", async () => {
   const { prevented } = withSelection(outside, () => fireCopy(plugin));
   assert.equal(prevented, false);
 });
+
+// ---- 多窗口：加载期间绝对不能写插件存储 ----
+
+test("onload 期间不写插件存储（否则多窗口会反复重载）", async () => {
+  const plugin = new LatexPaste({});
+  await plugin.onload();
+
+  assert.deepEqual(
+    Object.keys(plugin.stored),
+    [],
+    "onload 里 saveData 会写入 petal 目录，思源把变更广播给所有窗口，" +
+      "每个窗口的插件随之重载并再次写入，形成无限重启",
+  );
+  assert.equal(plugin.settings.debug, false, "调试日志默认关闭，正式版不该持续写盘");
+});
+
+test("注册失败但没有开调试时，也不写诊断", async () => {
+  const plugin = new LatexPaste({});
+  // addTopBar 抛错，制造一个 FAIL 步骤
+  plugin.addTopBar = () => {
+    throw new Error("boom");
+  };
+  await plugin.onload();
+
+  assert.deepEqual(
+    Object.keys(plugin.stored),
+    [],
+    "调试开关关闭时，即使有注册失败也不该落盘",
+  );
+});
