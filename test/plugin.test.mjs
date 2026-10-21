@@ -510,6 +510,51 @@ test("公式节点藏在 data-siyuan 注释里时也能还原", async () => {
   assert.doesNotMatch(store["text/plain"], /🏷/, "块图标不该被转进正文");
 });
 
+test("跨多个块复制：每条 data-siyuan 注释里的公式都要还原", async () => {
+  const { plugin } = await createPlugin();
+  // 选区内有几个块，思源就给几条注释。只解第一条会把后面几个块的公式整段漏掉。
+  const blockA =
+    '<div data-type="NodeParagraph"><div contenteditable="true">First ' +
+    '<span data-type="inline-math" data-subtype="math" data-content="a_1">a₁</span></div></div>';
+  const blockB =
+    '<div data-type="NodeParagraph"><div contenteditable="true">Second ' +
+    '<span data-type="inline-math" data-subtype="math" data-content="b_2">b₂</span></div></div>';
+  const outerHtml =
+    `<!--data-siyuan='${Buffer.from(blockA, "utf8").toString("base64")}'--><p>First a₁</p>` +
+    `<!--data-siyuan='${Buffer.from(blockB, "utf8").toString("base64")}'--><p>Second b₂</p>`;
+
+  const container = makeCopyTarget(outerHtml);
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.match(store["text/plain"], /\$a_1\$/, "第一块的公式要还原");
+  assert.match(store["text/plain"], /\$b_2\$/, "第二块的公式同样要还原");
+});
+
+test("文本里的 &#10; 实体要还原成真正的换行", async () => {
+  const { handler } = await createPlugin();
+  const { resolved } = firePaste(handler, {
+    textHTML: "<p>$$a=1&#10;b=2$$</p>",
+    textPlain: "$$a=1 b=2$$",
+  });
+
+  assert.match(resolved.textPlain, /a=1\nb=2/, "&#10; 应该变成换行，否则多行公式会挤成一行");
+  assert.doesNotMatch(resolved.textPlain, /&#10;/, "不能把实体原样留在公式里");
+});
+
+test("单引号属性 / katex-display 也能识别并救回公式", async () => {
+  const { handler } = await createPlugin();
+  // 网页里的 HTML 常用单引号，class 也可能带后缀，判定太严就会整个粘贴失效
+  const { resolved } = firePaste(handler, {
+    textHTML:
+      "<p><span class='katex-display'><span class='katex'>" +
+      "<annotation encoding='application/x-tex'>x^2</annotation></span></span></p>",
+    textPlain: "x2",
+  });
+
+  assert.ok(resolved, "应该被插件接管");
+  assert.match(resolved.textPlain, /\$x\^2\$/, "应该从 annotation 里救回 LaTeX");
+});
+
 test("真实块结构：行内 + 块级公式混排", async () => {
   const { plugin } = await createPlugin();
   const inline = (latex, rendered) =>

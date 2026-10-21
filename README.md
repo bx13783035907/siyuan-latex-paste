@@ -68,7 +68,7 @@ Details:
 | Markdown formulas `$ … $` | on | Also parse `$x^2+1=y$` as a formula |
 | Copy out as Markdown | on | Restore `$` delimiters when copying formulas out of SiYuan, so other Markdown apps render them |
 | Bare LaTeX | off | Detect undelimited formulas line by line. Experimental, may misfire. |
-| Debug log | on | Log each paste to the console and toast on load — useful to confirm the plugin is alive |
+| Debug log | off | Log each paste to the console and toast on load — turn it on only when investigating something |
 
 ## If it doesn't work
 
@@ -78,7 +78,7 @@ If `name` is `siyuan-latex-paste`, the folder must be `<workspace>/data/plugins/
 
 **2. Confirm the plugin actually loaded.**
 
-With the debug log on, a "LaTeX 公式粘贴：已加载" toast appears on load. No toast means it never started: check the folder name, restart SiYuan, and make sure you installed it into the workspace you're currently using (SiYuan supports multiple workspaces and plugins are per-workspace).
+Turn on "Debug log" in the plugin settings, then restart. A "LaTeX 公式粘贴：已加载" toast appears on load, and each paste is logged to the console. No toast means it never started: check the folder name, restart SiYuan, and make sure you installed it into the workspace you're currently using (SiYuan supports multiple workspaces and plugins are per-workspace).
 
 **3. Read the console.**
 

@@ -26,8 +26,9 @@ const ENV_NAMES =
 /** 一条正则覆盖各种写法，用命名组区分类型 */
 const MATH_IN_TEXT = new RegExp(
   [
-    `\\$\\$(?<dollar>[\\s\\S]*?)\\$\\$`, // $$ ... $$
-    // 定界符前的反斜杠要成奇数，\[ 才是定界符；\\[ 只是字面文本
+    // 所有定界符前面都要求「反斜杠不成对」，即没被转义过。
+    // \[ 是定界符，\\[ 只是字面文本；\$ 同理。
+    `(?<!\\\\)\\$\\$(?<dollar>[\\s\\S]*?)(?<!\\\\)\\$\\$`, // $$ ... $$
     `(?<!\\\\)\\\\\\[(?<bracket>[\\s\\S]*?)(?<!\\\\)\\\\\\]`, // \[ ... \]
     `(?<!\\\\)\\\\\\((?<paren>[\\s\\S]*?)(?<!\\\\)\\\\\\)`, // \( ... \)
     `(?<!\\\\)\\\\begin\\{(?<envName>${ENV_NAMES})\\}(?<envBody>[\\s\\S]*?)(?<!\\\\)\\\\end\\{\\k<envName>\\}`,
@@ -97,23 +98,25 @@ export function stashMathInHtml(html: string, segments: MathSegment[] = []): Sta
   // （从网页、ChatGPT 复制的块级公式经常是这样）
   const source = html.replace(/<br\s*\/?>/gi, "\n");
 
-  let result = "";
+  // 用数组收集再 join：整页网页的 HTML 可能有上百万字符，
+  // 逐次 += 拼接在大字符串上会退化成 O(n²)
+  const chunks: string[] = [];
   let cursor = 0;
   const tagRe = /<[^>]*>/g;
   let match: RegExpExecArray | null;
 
   while ((match = tagRe.exec(source)) !== null) {
     if (match.index > cursor) {
-      result += stashInText(source.slice(cursor, match.index), segments);
+      chunks.push(stashInText(source.slice(cursor, match.index), segments));
     }
-    result += match[0];
+    chunks.push(match[0]);
     cursor = match.index + match[0].length;
   }
   if (cursor < source.length) {
-    result += stashInText(source.slice(cursor), segments);
+    chunks.push(stashInText(source.slice(cursor), segments));
   }
 
-  return { html: result, segments };
+  return { html: chunks.join(""), segments };
 }
 
 /** 把 Markdown 里的占位符还原成思源公式 */
@@ -208,26 +211,38 @@ export function extractMathNodes(root: HTMLElement, segments: MathSegment[] = []
 }
 
 /**
- * 思源的「复制富文本」会把完整的块 HTML 塞进 text/html 的一个注释里（base64）。
+ * 思源的「复制富文本」会把完整的块 HTML 塞进 text/html 的注释里（base64）。
  *
  * 外层的 HTML 只是给外部软件看的简化版，里面可能连公式节点都没有；
  * 真正的 data-content 躺在注释里。想还原公式就得往注释里翻。
+ *
+ * 注意是**多个**：选区内有几个块，就可能有几个注释。只取第一个会把
+ * 后面几个块的公式整段漏掉，所以全部解出来按顺序拼接。
  */
-export function extractSiyuanComment(html: string): string {
-  const match = /<!--data-siyuan='([A-Za-z0-9+/=\s]+)'-->/.exec(html);
-  if (!match) {
-    return "";
+export function extractSiyuanComments(html: string): string[] {
+  if (!html || !html.includes("data-siyuan")) {
+    return [];
   }
-  try {
-    const binary = atob(match[1].replace(/\s+/g, ""));
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
+  const results: string[] = [];
+  const re = /<!--data-siyuan='([A-Za-z0-9+/=\s]+)'-->/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(html)) !== null) {
+    try {
+      const binary = atob(match[1].replace(/\s+/g, ""));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const decoded = new TextDecoder("utf-8").decode(bytes);
+      if (decoded) {
+        results.push(decoded);
+      }
+    } catch {
+      // 单个注释解不开就跳过，别影响其他块
     }
-    return new TextDecoder("utf-8").decode(bytes);
-  } catch {
-    return "";
   }
+  return results;
 }
 
 /**
@@ -235,19 +250,18 @@ export function extractSiyuanComment(html: string): string {
  *
  * 从渲染过的网页复制时，纯文本里的 $ 早就被吃掉了，光看文本是判断不出来的，
  * 得看 HTML 里有没有 KaTeX/MathJax 这类公式标记。
+ *
+ * 这是「要不要处理」的总闸门，漏判就等于整个粘贴不生效，所以宁可宽松：
+ * 属性值单双引号都认，class 也按单词边界匹配（katex-display 同样算）。
  */
+const MATH_NODE_HINT =
+  /data-type=["'](?:NodeMathBlock|inline-math)["']|data-subtype=["']math["']|class=["'][^"']*\b(?:katex|math)\b|encoding=["']application\/x-tex["']/i;
+
 export function hasMathNodes(html: string): boolean {
   if (!html) {
     return false;
   }
-  return (
-    html.includes('data-type="NodeMathBlock"') ||
-    html.includes('data-type="inline-math"') ||
-    html.includes('data-subtype="math"') ||
-    html.includes('class="katex') ||
-    html.includes('class="math') ||
-    html.includes('encoding="application/x-tex"')
-  );
+  return MATH_NODE_HINT.test(html);
 }
 
 /**
@@ -266,24 +280,37 @@ const ENTITIES: Record<string, string> = {
 };
 
 /**
- * 只认几个常见实体，不交给 DOM 解析。
+ * 只认常见命名实体 + 任意数字实体，不交给 DOM 解析。
  *
  * 用 textarea.innerHTML 那种写法看着省事，但公式里本来就可能出现裸 <，
  * 会被当成标签吃掉。一次正则扫完也不会有「替换出来的 &lt; 又被二次替换」的连锁问题。
+ *
+ * 数字实体必须支持：思源把公式里的换行存成 `&#10;`，多行 align 环境全靠它，
+ * 不解出来整个公式会挤成一行。
  */
-const ENTITY_RE = /&(lt|gt|amp|quot|apos|nbsp|#0*39|#x27);/gi;
+const ENTITY_RE = /&(?:(lt|gt|amp|quot|apos|nbsp)|#(\d+)|#[xX]([0-9a-fA-F]+));/g;
 
 export function decodeEntities(text: string): string {
   if (!text.includes("&")) {
     return text;
   }
-  return text.replace(ENTITY_RE, (matched, name: string) => {
-    const key = name.toLowerCase();
-    if (key.startsWith("#")) {
-      return "'";
-    }
-    return ENTITIES[key] ?? matched;
-  });
+  return text.replace(
+    ENTITY_RE,
+    (matched, name: string | undefined, dec: string | undefined, hex: string | undefined) => {
+      if (name) {
+        return ENTITIES[name.toLowerCase()] ?? matched;
+      }
+      const code = dec !== undefined ? Number(dec) : parseInt(hex ?? "", 16);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) {
+        return matched;
+      }
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return matched;
+      }
+    },
+  );
 }
 
 /** 粗略去掉标签，用来统计公式数量 / 判断是否还有残留定界符 */

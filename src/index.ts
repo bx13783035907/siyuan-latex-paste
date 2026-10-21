@@ -9,7 +9,7 @@ import {
 } from "./latex";
 import {
   extractMathNodes,
-  extractSiyuanComment,
+  extractSiyuanComments,
   hasMathNodes,
   restoreMath,
   stashMathInHtml,
@@ -347,7 +347,7 @@ module.exports = class LatexPaste extends Plugin {
       if (!target || typeof target.closest !== "function" || !target.closest(".protyle-wysiwyg")) {
         return;
       }
-      if (this.isInCodeContext()) {
+      if (this.isInCodeContext(target)) {
         return;
       }
       // 事件总线刚处理过这次粘贴，不再重复改
@@ -405,10 +405,18 @@ module.exports = class LatexPaste extends Plugin {
 
     // 思源内部互相粘贴靠这个，先留一份原样的（必须在替换占位符之前取）
     const siyuanHTML = holder.innerHTML;
-    // 外层 HTML 里可能没有公式节点，得连注释里的完整块结构一起看
-    const comment = extractSiyuanComment(siyuanHTML);
 
-    if (!hasMathNodes(siyuanHTML) && !(comment && hasMathNodes(comment))) {
+    // 快速排除：外层既没有公式标记、也没带思源原始注释，到此为止。
+    // 这一步很关键 —— 每次 Ctrl+C 都会走进来，而下面要跑整段 base64 解码，
+    // 复制普通文字时没必要付这个代价。
+    const outerHasMath = hasMathNodes(siyuanHTML);
+    if (!outerHasMath && !siyuanHTML.includes("data-siyuan")) {
+      return null;
+    }
+
+    // 公式可能躺在 data-siyuan 注释里，而且选区内每个块各有一条
+    const commentHtml = extractSiyuanComments(siyuanHTML).join("");
+    if (!outerHasMath && !hasMathNodes(commentHtml)) {
       return null;
     }
 
@@ -418,9 +426,9 @@ module.exports = class LatexPaste extends Plugin {
     let source = holder;
     let segments = extractMathNodes(source);
 
-    if (segments.length === 0 && comment) {
+    if (segments.length === 0 && commentHtml) {
       const fromComment = document.createElement("div");
-      fromComment.innerHTML = comment;
+      fromComment.innerHTML = commentHtml;
       fromComment.querySelectorAll(".protyle-attr").forEach((node) => node.remove());
       const extracted = extractMathNodes(fromComment);
       if (extracted.length > 0) {
@@ -471,12 +479,41 @@ module.exports = class LatexPaste extends Plugin {
       showMessage(this.i18n.commandCopyEmpty);
       return;
     }
+    const ok = await this.writeToClipboard(result.markdown);
+    showMessage(ok ? this.i18n.commandCopyDone : this.i18n.commandCopyFailed);
+    if (ok) {
+      this.log("复制：已写入剪贴板", { markdown: result.markdown });
+    }
+  }
+
+  /**
+   * 写系统剪贴板。
+   *
+   * navigator.clipboard 在窗口失去焦点时会抛 NotAllowedError —— 多窗口切换、
+   * 点完菜单焦点转移都可能触发，这时退回老接口再试一次。
+   */
+  private async writeToClipboard(text: string): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(result.markdown);
-      showMessage(this.i18n.commandCopyDone);
+      await navigator.clipboard.writeText(text);
+      return true;
     } catch (error) {
-      console.error("[latex-paste] clipboard write failed", error);
-      showMessage(this.i18n.commandCopyFailed);
+      console.warn("[latex-paste] clipboard API 失败，改用 execCommand", error);
+    }
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.top = "-1000px";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      return ok;
+    } catch (error) {
+      console.error("[latex-paste] 写入剪贴板失败", error);
+      return false;
     }
   }
 
@@ -528,8 +565,32 @@ module.exports = class LatexPaste extends Plugin {
    * 上面那条拦不住，所以留一个能主动调用的入口。
    */
   private copyAsMarkdown = async () => {
-    await this.writeMarkdown(this.selectionToMarkdown());
+    // 有选中内容就按选区转；没有选区就退化成「光标所在的那个块」，
+    // 这样绑了快捷键之后不需要先精确选中一段文字。
+    let result = this.selectionToMarkdown();
+    if (!result) {
+      const block = this.currentBlock();
+      if (block) {
+        result = this.blocksToMarkdown([block]);
+      }
+    }
+    await this.writeMarkdown(result);
   };
+
+  /** 光标所在的那个块元素（思源的块都带 data-node-id） */
+  private currentBlock(): HTMLElement | null {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+    const anchor = selection.anchorNode;
+    const element =
+      anchor?.nodeType === Node.TEXT_NODE ? anchor.parentElement : (anchor as HTMLElement | null);
+    if (!element || typeof element.closest !== "function" || !element.closest(".protyle-wysiwyg")) {
+      return null;
+    }
+    return (element.closest("[data-node-id]") as HTMLElement | null) ?? null;
+  }
 
   /**
    * 块图标菜单。
@@ -667,20 +728,31 @@ module.exports = class LatexPaste extends Plugin {
     return { markdown: result.text, count: segments.length + result.count };
   }
 
-  /** 光标在代码块 / 行内代码里时不做任何转换 */
-  private isInCodeContext(): boolean {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) {
-      return false;
-    }
-    const anchor = selection.anchorNode;
-    if (!anchor) {
-      return false;
-    }
-    const element = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : (anchor as HTMLElement);
+  /**
+   * 光标在代码块 / 行内代码里时不做任何转换。
+   *
+   * DOM 路径直接传粘贴目标元素，比看 selection 更准
+   * （鼠标在别处、或用快捷键触发时，selection 未必停在粘贴点上）。
+   */
+  private isInCodeContext(target?: Element | null): boolean {
+    let element: Element | null = target ?? null;
     if (!element) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        return false;
+      }
+      const anchor = selection.anchorNode;
+      if (!anchor) {
+        return false;
+      }
+      element =
+        anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : (anchor as HTMLElement);
+    }
+    if (!element || typeof element.closest !== "function") {
       return false;
     }
-    return Boolean(element.closest('[data-type="NodeCodeBlock"]') || element.closest("code"));
+    return Boolean(
+      element.closest('[data-type="NodeCodeBlock"]') || element.closest("code"),
+    );
   }
 };

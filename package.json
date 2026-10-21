@@ -1,6 +1,6 @@
 {
   "name": "siyuan-latex-paste",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "private": true,
   "description": "SiYuan plugin: paste LaTeX and get real math formulas",
   "scripts": {
