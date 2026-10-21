@@ -31,8 +31,29 @@ With **Copy out as Markdown** enabled, copying formulas out of SiYuan restores t
 Details:
 
 - **Only selections containing formulas are touched.** Everything else keeps SiYuan's native behaviour.
-- **`text/siyuan` is preserved**, so pasting back into SiYuan is still lossless (block IDs, refs, …). Only other apps get the Markdown.
+- **What lands on the clipboard is Markdown in the plain-text layer.** Paste it back into SiYuan and it is re-parsed as Markdown, so formulas and structure survive; paste into Obsidian or Typora and it is the same Markdown.
 - When copying from a rendered web page where the `$` are already gone, the plugin tries to recover the LaTeX from KaTeX / MathJax `<annotation>` nodes.
+- SiYuan's "copy rich text" stashes the full block DOM inside a base64 comment in `text/html`, with a simplified version outside. The plugin digs into those comments for `data-content` — **one comment per block, and all of them are parsed**.
+
+### Block structure is converted too
+
+SiYuan expresses lists, headings and quotes with custom tags like `<div data-type="NodeList">`, while Turndown only understands standard HTML. Without translation, everything copied out collapses into plain paragraphs with no markup:
+
+| In SiYuan | Copied out |
+| --- | --- |
+| Bullet / ordered list | `- item` / `1. item`, nested items indented |
+| Task list | `- [ ]` / `- [x]` |
+| Heading h1–h6 | `#` … `######` |
+| Blockquote | `> ` |
+| Callout | `> ` (Markdown has no equivalent, a quote is the closest match) |
+| Table | GFM table (paragraphs inside cells don't break it) |
+| Code block | ` ```lang ` fence, contents preserved verbatim |
+| Thematic break | `---` |
+| Bold / italic / inline code / strikethrough | `**bold**` / `*italic*` / `` `code` `` / `~~struck~~` |
+| Link | `[text](url)`, url taken from SiYuan's `data-href` |
+| Tag | `#tag#` |
+| Display formula inside a list item | Still a `$$` block — it is no longer swallowed |
+| Display formula inside a table cell | Downgraded to inline `$…$`, otherwise the line breaks would shatter the table |
 
 ## Install
 

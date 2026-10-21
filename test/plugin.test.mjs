@@ -754,3 +754,225 @@ test("注册失败但没有开调试时，也不写诊断", async () => {
     "调试开关关闭时，即使有注册失败也不该落盘",
   );
 });
+
+// ---- 结构化内容：列表 / 标题 / 引用 / 代码块 ----
+// 思源用 div[data-type=NodeList] 这类自定义标签表达结构，Turndown 只认标准标签。
+// 没有 blocks.ts 那层翻译的话，这些结构复制出去会退化成纯文本段落。
+
+const inlineMath = (latex, shown) =>
+  `<span data-type="inline-math" data-subtype="math" data-content="${latex}">${shown}</span>`;
+
+test("列表复制保留 - 标记和嵌套缩进", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeList" data-subtype="u">' +
+      '<div data-type="NodeListItem">' +
+      '<div class="protyle-action"></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">第一项</div></div>' +
+      '<div data-type="NodeList" data-subtype="u"><div data-type="NodeListItem">' +
+      '<div class="protyle-action"></div>' +
+      `<div data-type="NodeParagraph"><div contenteditable="true">嵌套 ${inlineMath("x^2", "x²")}</div></div>` +
+      "</div></div></div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^-\s+第一项/m, "列表项要带 - 标记");
+  assert.match(md, /^\s+-\s+嵌套 \$x\^2\$/m, "嵌套项要缩进，公式也要还原");
+  assert.doesNotMatch(md, /^- {2,}/m, "标记后只留一个空格，和手写 Markdown 保持一致");
+});
+
+test("有序列表用 1. 2. 而不是 -", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeList" data-subtype="o">' +
+      '<div data-type="NodeListItem"><div data-type="NodeParagraph">' +
+      `<div contenteditable="true">甲 ${inlineMath("a", "a")}</div></div></div>` +
+      '<div data-type="NodeListItem"><div data-type="NodeParagraph">' +
+      `<div contenteditable="true">乙 ${inlineMath("b", "b")}</div></div></div>` +
+      "</div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^1\.\s+甲 \$a\$/m);
+  assert.match(md, /^2\.\s+乙 \$b\$/m);
+});
+
+test("标题复制带 ## 级别", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeHeading" data-subtype="h2"><div contenteditable="true">' +
+      `标题 ${inlineMath("a^2", "a²")}</div></div>`,
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.match(store["text/plain"], /^## 标题 \$a\^2\$/m, "应该输出 ## 而不是裸文本");
+});
+
+test("引用复制带 > 标记", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeBlockquote"><div data-type="NodeParagraph">' +
+      `<div contenteditable="true">引用 ${inlineMath("b_1", "b₁")}</div></div></div>`,
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.match(store["text/plain"], /^>\s+引用 \$b_1\$/m, "应该输出 > 而不是裸文本");
+});
+
+test("表格复制成 GFM 表格，公式列正常", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeTable"><table>' +
+      "<tr><th>符号</th><th>含义</th></tr>" +
+      `<tr><td>${inlineMath("\\alpha", "α")}</td><td>角度</td></tr>` +
+      "</table></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /\| 符号 \| 含义 \|/);
+  assert.match(md, /\| \$\\alpha\$ \| 角度 \|/);
+});
+
+test("代码块内容原样保留，里面的定界符不被当公式", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      `说明 ${inlineMath("x", "x")}</div></div>` +
+      '<div data-type="NodeCodeBlock" data-subtype="python">' +
+      '<div class="protyle-action"><span class="protyle-action__language">python</span></div>' +
+      '<div class="hljs"><div contenteditable="true">print("\\(not math\\)")</div></div></div>',
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /```python/, "代码块要带语言标记");
+  assert.match(md, /\\\(not math\\\)/, "代码里的 \\( 必须原样保留");
+  assert.doesNotMatch(md, /\$not math\$/, "不能把代码里的内容包成公式");
+});
+
+test("表格单元格里的段落不会撑破表格", async () => {
+  const { plugin } = await createPlugin();
+  // 真实思源的单元格里通常还套一层 NodeParagraph，包成 <p> 会在 GFM 表格里插入换行
+  const container = makeCopyTarget(
+    '<div data-type="NodeTable"><table>' +
+      "<tr><th>符号</th><th>含义</th></tr>" +
+      '<tr><td><div data-type="NodeParagraph"><div contenteditable="true">' +
+      `${inlineMath("\\beta", "β")}</div></div></td>` +
+      '<td><div data-type="NodeParagraph"><div contenteditable="true">角度</div></div></td></tr>' +
+      "</table></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /\| \$\\beta\$ \| 角度 \|/, "整行必须在一行内完成");
+});
+
+test("综合片段：标题 + 段落 + 列表 + 引用一起复制", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeHeading" data-subtype="h2">' +
+      '<div contenteditable="true">定理</div></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      `设 ${inlineMath("f", "f")} 为全纯函数。</div></div>` +
+      '<div data-type="NodeList" data-subtype="u">' +
+      '<div data-type="NodeListItem"><div data-type="NodeParagraph">' +
+      '<div contenteditable="true">条件一</div></div></div>' +
+      '<div data-type="NodeListItem"><div data-type="NodeParagraph">' +
+      `<div contenteditable="true">条件二 ${inlineMath("g", "g")}</div></div></div>` +
+      "</div>" +
+      '<div data-type="NodeBlockquote"><div data-type="NodeParagraph">' +
+      `<div contenteditable="true">推论 ${inlineMath("h", "h")}</div></div></div>`,
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^## 定理/m, "标题");
+  assert.match(md, /设 \$f\$ 为全纯函数。/, "段落 + 行内公式");
+  assert.match(md, /^- 条件一$/m, "列表项");
+  assert.match(md, /^- 条件二 \$g\$/m, "列表项 + 公式");
+  assert.match(md, /^> 推论 \$h\$/m, "引用 + 公式");
+});
+
+test("列表项里的块级公式不会被吞掉", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeList" data-subtype="u"><div data-type="NodeListItem">' +
+      '<div class="protyle-action"></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">推导</div></div>' +
+      '<div data-type="NodeMathBlock" data-content="E = mc^2">渲染乱码</div>' +
+      "</div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^- 推导$/m, "列表项文字");
+  assert.match(md, /\$\$\nE = mc\^2\n\$\$/, "列表项里的块级公式要还原成 $$ 块");
+});
+
+test("表格单元格里的块级公式降级成行内，表格不散架", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeTable"><table>' +
+      "<tr><th>积分</th><th>备注</th></tr>" +
+      '<tr><td><div data-type="NodeMathBlock" data-content="\\int_0^1 f">乱码</div></td>' +
+      "<td>连续</td></tr></table></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /^\| 积分 \| 备注 \|$/m, "表头还是单行");
+  assert.match(md, /^\| \$\\int_0\^1 f\$ \| 连续 \|$/m, "单元格里只能是行内公式，且表格行没被拆开");
+  assert.doesNotMatch(md, /\$\$/, "表格里不能出现 $$ 块");
+});
+
+test("引述块（Callout）复制成引用块", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeCallout" data-subtype="NOTE">' +
+      '<div class="protyle-icons"></div>' +
+      '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      `提示 ${inlineMath("a", "a")}</div></div></div>`,
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.match(store["text/plain"], /^> 提示 \$a\$/m, "Callout 要降成引用块，内容不能变成裸段落");
+});
+
+test("思源 data-type 写法的行内格式转成 Markdown 标记", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      '<span data-type="strong">粗</span>' +
+      '<span data-type="em">斜</span>' +
+      '<span data-type="code">code</span>' +
+      '<span data-type="s">删除</span>' +
+      '<span data-type="a" data-href="https://example.com">链接</span>' +
+      `<span data-type="inline-math" data-content="x^2">x²</span>` +
+      "</div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+  const md = store["text/plain"];
+
+  assert.match(md, /\*\*粗\*\*/, "加粗");
+  assert.match(md, /\*斜\*/, "斜体");
+  assert.match(md, /`code`/, "行内代码");
+  assert.match(md, /~~删除~~/, "删除线用两个波浪线，GitHub / Obsidian 才认");
+  assert.match(md, /\[链接\]\(https:\/\/example\.com\)/, "链接要用 data-href");
+  assert.match(md, /\$x\^2\$/, "行内公式不受影响");
+});
+
+test("思源标签复制成 #标签#", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeParagraph"><div contenteditable="true">' +
+      '<span data-type="tag" data-content="复分析">复分析</span> ' +
+      inlineMath("z", "z") +
+      "</div></div>",
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.match(store["text/plain"], /#复分析# \$z\$/, "标签要带上 # 才有语义");
+});

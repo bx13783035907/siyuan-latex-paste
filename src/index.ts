@@ -16,6 +16,7 @@ import {
   stripHtml,
   type MathSegment,
 } from "./html";
+import { renderSiyuanBlocks } from "./blocks";
 import { DEFAULT_SETTINGS, SETTINGS_KEY, type LatexPasteSettings } from "./settings";
 
 interface IPasteDetail {
@@ -441,8 +442,11 @@ module.exports = class LatexPaste extends Plugin {
     if (segments.length === 0) {
       return null;
     }
+    // 先把思源的块结构（列表 / 标题 / 引用 / 代码块）翻译成标准 HTML 标签。
+    // 不翻译的话 Turndown 认不出来，列表符号、## 标题、> 引用会整个丢掉。
+    const normalized = renderSiyuanBlocks(source);
     // 块级公式还原时会带出前后空行，连续几段就会堆成一堆空行
-    const markdown = restoreMath(this.turndownService().turndown(source.innerHTML), segments)
+    const markdown = restoreMath(this.turndownService().turndown(normalized.innerHTML), segments)
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     if (!markdown) {
@@ -702,6 +706,31 @@ module.exports = class LatexPaste extends Plugin {
       });
       this.turndown.use(gfm);
       this.turndown.remove(["script", "style", "noscript", "meta", "link"]);
+      // turndown-plugin-gfm 的删除线只输出单个 ~，GitHub / Obsidian 都要求 ~~，
+      // 单个波浪线过去就是一串普通文字。这条规则排在 gfm 后面，优先级更高
+      this.turndown.addRule("doubleTildeStrike", {
+        filter: ["s", "del"],
+        replacement: (content) => `~~${content}~~`,
+      });
+      // Turndown 默认写成 "-   文本"（标记后三个空格），虽然各家解析器都认，
+      // 但和手写的 Markdown 放在一起会显得很怪，统一成单空格
+      this.turndown.addRule("compactListItem", {
+        filter: "li",
+        replacement: (content, node, options) => {
+          const parent = node.parentNode as HTMLElement | null;
+          let prefix = `${options.bulletListMarker} `;
+          if (parent && parent.nodeName === "OL") {
+            const start = Number(parent.getAttribute("start") ?? 1);
+            const index = Array.prototype.indexOf.call(parent.children, node);
+            prefix = `${start + index}. `;
+          }
+          const body = content
+            .replace(/^\n+/, "")
+            .replace(/\n+$/, "\n")
+            .replace(/\n/g, "\n    ");
+          return prefix + body + (node.nextSibling && !/\n$/.test(body) ? "\n" : "");
+        },
+      });
     }
     return this.turndown;
   }

@@ -119,21 +119,38 @@ export function stashMathInHtml(html: string, segments: MathSegment[] = []): Sta
   return { html: chunks.join(""), segments };
 }
 
+/**
+ * 占位符所在的那一行是不是 GFM 表格的一行。
+ *
+ * 单元格里塞不下 `$$` 多行公式：还原出的换行会把表格的一行拆成好几行，
+ * 整张表当场碎掉。表格里只能退成行内 `$…$`，内容保住、表格也活着。
+ */
+function inTableRow(markdown: string, offset: number): boolean {
+  const lineStart = markdown.lastIndexOf("\n", offset - 1) + 1;
+  let lineEnd = markdown.indexOf("\n", offset);
+  if (lineEnd === -1) {
+    lineEnd = markdown.length;
+  }
+  const line = markdown.slice(lineStart, lineEnd).trim();
+  return line.startsWith("|") && line.length > 1;
+}
+
 /** 把 Markdown 里的占位符还原成思源公式 */
 export function restoreMath(markdown: string, segments: MathSegment[]): string {
   if (!segments.length) {
     return markdown;
   }
-  return markdown.replace(HTML_TOKEN_RE, (_matched, index: string) => {
+  return markdown.replace(HTML_TOKEN_RE, (_matched, index: string, offset: number) => {
     const segment = segments[Number(index)];
     if (!segment) {
       return "";
     }
     const body = segment.latex.replace(/(?<!\\)\$/g, "\\$");
-    if (segment.display) {
+    if (segment.display && !inTableRow(markdown, offset)) {
       return `\n\n$$\n${body}\n$$\n\n`;
     }
-    return `$${body}$`;
+    // 表格单元格里连换行都留不得，align 环境的换行要压成空格
+    return `$${body.replace(/\s*\n\s*/g, " ")}$`;
   });
 }
 
