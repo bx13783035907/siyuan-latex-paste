@@ -154,6 +154,12 @@ function convertInlineMark(el: HTMLElement): Node | null {
     return out;
   }
 
+  // 只剥行内元素的外壳。块级容器（div 开头的 data-type）要把标签原样留着，
+  // 剥掉会让它的内部结构失去边界，相邻块粘连在一起
+  if (el.tagName !== "SPAN") {
+    return null;
+  }
+
   // 其余行内节点（标签、块引用、着色文字……）剥掉外壳只留文字。
   // Markdown 表达不了这些东西，但正文不能丢
   const frag = document.createDocumentFragment();

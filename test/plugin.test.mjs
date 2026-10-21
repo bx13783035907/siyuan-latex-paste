@@ -1062,6 +1062,18 @@ test("光标停在列表项里用命令复制时，带出列表符号而不是�
   assert.match(written, /^- 条目 \$x\$/m, "光标在项里也要带上 - 标记，不能只吐一段裸文字");
 });
 
+test("SuperBlock 里的两个块不会粘在一起", async () => {
+  const { plugin } = await createPlugin();
+  const container = makeCopyTarget(
+    '<div data-type="NodeSuperBlock" data-sb-layout="col">' +
+      `<div data-type="NodeParagraph"><div contenteditable="true">左 ${inlineMath("p", "p")}</div></div>` +
+      '<div data-type="NodeParagraph"><div contenteditable="true">右</div></div></div>',
+  );
+  const { store } = withSelection(container, () => fireCopy(plugin));
+
+  assert.equal(store["text/plain"], "左 $p$\n\n右", "块级容器不能被剥壳，否则两块会粘成一行");
+});
+
 test("代码块里的连续空行原样保留", async () => {
   const { plugin } = await createPlugin();
   const container = makeCopyTarget(
